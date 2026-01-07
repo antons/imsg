@@ -61,7 +61,46 @@ public struct MessageSender {
       throw IMsgError.invalidChatTarget("Missing chat identifier or guid")
     }
 
+    if resolved.attachmentPath.isEmpty == false {
+      resolved.attachmentPath = try stageAttachment(at: resolved.attachmentPath)
+    }
+
     try sendViaAppleScript(resolved, chatTarget: chatTarget, useChat: useChat)
+  }
+
+  private func stageAttachment(at path: String) throws -> String {
+    let expandedPath = (path as NSString).expandingTildeInPath
+    let sourceURL = URL(fileURLWithPath: expandedPath)
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: sourceURL.path) else {
+      throw IMsgError.appleScriptFailure("Attachment not found at \(sourceURL.path)")
+    }
+
+    var lastError: Error?
+    for root in stagingRoots() {
+      do {
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let stagingDir = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        let destination = stagingDir.appendingPathComponent(sourceURL.lastPathComponent, isDirectory: false)
+        try fileManager.copyItem(at: sourceURL, to: destination)
+        return destination.path
+      } catch {
+        lastError = error
+      }
+    }
+
+    throw lastError ?? IMsgError.appleScriptFailure("Unable to stage attachment")
+  }
+
+  private func stagingRoots() -> [URL] {
+    let fileManager = FileManager.default
+    let home = fileManager.homeDirectoryForCurrentUser
+    let messagesRoot = home.appendingPathComponent("Library/Messages/Attachments", isDirectory: true)
+    return [
+      messagesRoot.appendingPathComponent("imsg-staging", isDirectory: true),
+      fileManager.temporaryDirectory.appendingPathComponent("imsg-staging", isDirectory: true),
+    ]
   }
 
   private func sendViaAppleScript(
